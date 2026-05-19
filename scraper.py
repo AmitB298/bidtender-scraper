@@ -7,7 +7,10 @@ import os, hashlib, time
 load_dotenv()
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*",
+}
 
 def make_id(text):
     return hashlib.md5(text.encode()).hexdigest()[:40]
@@ -19,49 +22,123 @@ def save(tender):
     except Exception as e:
         print(f"❌ {e}")
 
-def scrape(url, org, state, category):
+def scrape_cppp():
+    print("🔍 Scraping CPPP...")
+    for page in range(1, 6):
+        try:
+            url = f"https://eprocure.gov.in/eprocure/app?page=FrontEndLatestActiveTenders&service=page&currentPage={page}"
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            soup = BeautifulSoup(r.text, "html.parser")
+            rows = soup.select("table tr")[1:]
+            count = 0
+            for row in rows:
+                cols = row.select("td")
+                if len(cols) >= 4:
+                    title = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                    org = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                    deadline = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+                    ref = cols[0].get_text(strip=True) if cols else ""
+                    if len(title) > 10:
+                        save({
+                            "tender_id": make_id("CPPP-" + ref + title),
+                            "title": title[:500],
+                            "organization": org[:200],
+                            "state": "Central",
+                            "category": "government",
+                            "source": "CPPP",
+                            "source_url": "https://eprocure.gov.in",
+                            "status": "active"
+                        })
+                        count += 1
+            print(f"  Page {page}: {count} tenders")
+            time.sleep(3)
+        except Exception as e:
+            print(f"  ❌ Page {page}: {e}")
+
+def scrape_gem():
+    print("🔍 Scraping GeM...")
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
+        url = "https://bidplus.gem.gov.in/all-bids"
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+        # GeM bid cards
+        cards = soup.select(".bid-details-card, .card-body, div[class*='bid']")
+        count = 0
+        for card in cards:
+            title = card.get_text(strip=True)
+            if len(title) > 20:
+                save({
+                    "tender_id": make_id("GEM-" + title[:100]),
+                    "title": title[:500],
+                    "organization": "GeM Portal",
+                    "state": "Central",
+                    "category": "government",
+                    "source": "GeM",
+                    "source_url": url,
+                    "status": "active"
+                })
+                count += 1
+        print(f"  GeM: {count} tenders")
+    except Exception as e:
+        print(f"  ❌ GeM: {e}")
+
+def scrape_coalindia():
+    print("🔍 Scraping Coal India...")
+    try:
+        url = "https://www.coalindia.in/en-us/business/tenders.aspx"
+        r = requests.get(url, headers=HEADERS, timeout=30)
         soup = BeautifulSoup(r.text, "html.parser")
         links = soup.find_all("a", href=True)
         count = 0
         for a in links:
             title = a.get_text(strip=True)
             href = a["href"]
-            if len(title) > 30 and any(w in title.lower() for w in ["tender","bid","rfp","supply","work","contract","procurement"]):
-                full_url = href if href.startswith("http") else url.rstrip("/") + "/" + href.lstrip("/")
+            if len(title) > 20 and any(w in title.lower() for w in ["tender","supply","work","contract","bid","rfp","notice"]):
                 save({
-                    "tender_id": make_id(org + title),
+                    "tender_id": make_id("COAL-" + title),
                     "title": title[:500],
-                    "organization": org,
-                    "state": state,
-                    "category": category,
-                    "source": org,
-                    "source_url": full_url,
+                    "organization": "Coal India",
+                    "state": "Central",
+                    "category": "infrastructure",
+                    "source": "Coal India",
+                    "source_url": "https://www.coalindia.in" + href if href.startswith("/") else href,
                     "status": "active"
                 })
                 count += 1
-        print(f"  {org}: {count} tenders saved")
-        time.sleep(2)
+        print(f"  Coal India: {count} tenders")
     except Exception as e:
-        print(f"  ❌ {org}: {e}")
+        print(f"  ❌ Coal India: {e}")
 
-SOURCES = [
-    ("https://ntpctender.com/tenders/", "NTPC", "Central", "infrastructure"),
-    ("https://www.nhai.gov.in/tender-list", "NHAI", "Central", "construction"),
-    ("https://www.bhel.com/tenders", "BHEL", "Central", "infrastructure"),
-    ("https://www.iocl.com/tenders", "IOCL", "Central", "infrastructure"),
-    ("https://www.coalindia.in/en-us/business/tenders.aspx", "Coal India", "Central", "infrastructure"),
-    ("https://www.ongcindia.com/wps/wcm/connect/en/home/tender", "ONGC", "Central", "infrastructure"),
-    ("https://mahatenders.gov.in", "Maharashtra PWD", "Maharashtra", "construction"),
-    ("https://etender.up.nic.in", "UP Government", "Uttar Pradesh", "government"),
-    ("https://eproc.rajasthan.gov.in", "Rajasthan Government", "Rajasthan", "government"),
-    ("https://mpeproc.gov.in", "MP Government", "Madhya Pradesh", "government"),
-]
+def scrape_irctc():
+    print("🔍 Scraping Indian Railways...")
+    try:
+        url = "https://www.indianrailways.gov.in/railwayboard/view_section.jsp?lang=0&id=0,1,304,366,533"
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+        links = soup.find_all("a", href=True)
+        count = 0
+        for a in links:
+            title = a.get_text(strip=True)
+            if len(title) > 20 and any(w in title.lower() for w in ["tender","bid","rfp","supply","work","contract"]):
+                save({
+                    "tender_id": make_id("IR-" + title),
+                    "title": title[:500],
+                    "organization": "Indian Railways",
+                    "state": "Central",
+                    "category": "infrastructure",
+                    "source": "Indian Railways",
+                    "source_url": url,
+                    "status": "active"
+                })
+                count += 1
+        print(f"  Railways: {count} tenders")
+    except Exception as e:
+        print(f"  ❌ Railways: {e}")
 
 if __name__ == "__main__":
-    print("🚀 PSU + State Tender Scraper Starting...")
-    for url, org, state, cat in SOURCES:
-        print(f"\n🔍 Scraping {org}...")
-        scrape(url, org, state, cat)
+    print("🚀 BidTenderAssist Scraper v3")
+    scrape_cppp()
+    scrape_gem()
+    scrape_coalindia()
+    scrape_irctc()
     print("\n✅ All done!")
